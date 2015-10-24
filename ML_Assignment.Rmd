@@ -151,7 +151,7 @@ fact_class_train <- as.factor(traindata$classe[newTrainSet])
 #Create a factor response variable for the new test set.
 fact_class_test <- as.factor(traindata$classe[-newTrainSet])
 ```
-As can be seen, Accuracy was use to select the optimal model.  The final model used was mtry = 17 with an Accuarcy of 0.998.  
+As can be seen, Accuracy was use to select the optimal model.  The final model used was mtry = 17 with an Accuarcy of 0.998.  Since I used 10 Fold Cross Validation in the creation of my model the train function funcion will train on 9/10 of the data and test on the remaining tenth.  Therefore the resulting accuracy can be interpreted as in indication of the out-of-sample error as it compares the missing tenth agains the 9 tenths that were used in training.
 
 Therefore an estimate of the out-of-sample error rate is 1 - 0.998 = 0.002.
 
