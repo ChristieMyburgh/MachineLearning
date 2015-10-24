@@ -5,18 +5,210 @@ date: "18 October 2015"
 output: html_document
 ---
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+#ABSTRACT
+This report descibe a machine learning model developed to predict how "well"
+people performed barbell lifts.  Data from accelerometers on the belt, forearm,
+arm and dumpbell of 6 participants were used.  Based on the readings the model 
+will predict how well the excercise was performed according to one of the following:
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+* A - Correct according to specification 
+* B - Throwing elbows to the front
+* C - Lifting dumbbell only halve way
+* D - Lowering dumbbell only halve way
+* E - Throwing hips to the front.
 
-```{r}
-summary(cars)
+
+#1. DATA
+Data were obtained from the following website:
+
+http://groupware.les.inf.puc-rio.br/har
+
+The following libraries were used to generate the machine learning model.
+
+```{r load_libraries}
+#Libraries used in the analysis in this document.
+library(knitr)
+
+##Set global options - echo is set to TRUE by default so that I do not need to set
+# this for every code chunk.
+opts_chunk$set(echo = TRUE, results = "hide")
+
+suppressWarnings(suppressMessages(library(caret)))
+suppressWarnings(suppressMessages(library(dplyr)))
+suppressWarnings(suppressMessages(library(ggplot2)))
+suppressWarnings(suppressMessages(library(randomForest)))
+library(corrplot)
 ```
 
-You can also embed plots, for example:
+The code below show how the original training and test data sets were loaded and
+assigned to traindata and testdata dataframes respectively.
 
-```{r, echo=FALSE}
-plot(cars)
+```{r load data}
+traindata <- read.csv("N:/R_Directory/ML/Assignment/MachineLearning/pml-training.csv",
+                        sep = ",", header = TRUE)
+
+testdata <- read.csv("N:/R_Directory/ML/Assignment/MachineLearning/pml-testing.csv",
+                       sep=",", header=TRUE)
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+#2.DATA PRE-PROCESSING
+
+The traindata dataset consist of 19622 observations and 160 variables.  The testdata dataset consist of 20 observations and the same 160 variables except for the last one.  The "classe"" variable is missing from the testdata dataset and is replaced with the "problem_id" variable.
+
+Next I extract predictors from both initial datasets for further analyses.  I am discarding the first 6 variables as they are not directly associated with the sensor measurements.  Two new datasets are created in the process, trainPredictors and testPredictors.
+
+```{r subset_data, cache=TRUE}
+#Extract columns 7 to 159 from the original train and test datasets.
+trainPredictors <- traindata[,7:159]
+
+testPredictors <- testdata[,7:159]
+```
+Next, I convert all remaining predictors to numerical types and replace all missing values with zero.
+
+```{r transform_data, cache=TRUE}
+#Convert all Factor variables to numerical variables.
+trainPredictors <- suppressWarnings(data.frame(sapply(trainPredictors, as.numeric)))
+testPredictors <- suppressWarnings(data.frame(sapply(testPredictors, as.numeric)))
+
+#Replace all missing values with zero.
+trainPredictors[is.na(trainPredictors)] <- 0
+testPredictors[is.na(testPredictors)] <- 0
+```
+
+I am now in a position to do some elementary feature selection.  I will reduce the number of predictors as this leads to reduced computational time and complexity.
+
+##2.1 Near_Zero Variance Predictors.
+I start by removing all predictors with near zero variance.  Since these predictors have no information they can safely be discarded.  The code below is identifying the near zero predicttors and are removing them from the train and test data sets.  In total the number of predictors were reduced from 153 to 53, a reduction of 100.
+
+```{r near_zero, cache=TRUE}
+#Obtain the indexes of all near_zero predictors.
+zeroIdx <- nearZeroVar(trainPredictors)
+#Remove near_zero predictors
+trainPredictors <- trainPredictors[ ,-zeroIdx]
+#Obtain the indexes of all near_zero predictors.
+zeroIdx <- nearZeroVar(testPredictors)
+#Remove near_zero predictors
+testPredictors <- testPredictors[,-zeroIdx]
+```
+
+##2.2 Correlated Predictors.
+Next, I will try to identify colinearity between predictors and remove them from the train and test datasets.  Again, less predictors result in reduced complexity.  The correlation matrix clearly shows that there exist clustes of highly correlated predictors.
+```{r collinearity, cache=TRUE}
+#Calculate the correlation between predictors.
+correlations <- cor(trainPredictors)
+#Visualise the correlation matrix.
+corrplot(correlations, order="hclust")
+```
+Next I identify all predictors with a pairwise correlation of 0.75 and above and remove them from the training and test datasets.  By identifying and removing collinear predictors I have further reduced the predictors from 53 down to 32. 
+
+```{r remove_correlations,cache=TRUE}
+#Get column numbers for all predictors above a 0.75 correlation threshold.
+highCorr <- findCorrelation(correlations, cutoff=0.75)
+
+#Remove the collinear predictors from the training set.
+train_decorr <- trainPredictors[ , -highCorr]
+
+#Remove the collinear predictors from the test training set.
+test_decorr <- testPredictors[ , -highCorr]
+```
+Next I recalculate the correlation between remaining predictors and replot them.  The plot clearly shows that all highly correlated (>0.75) predictors have been removed.
+
+```{r decorrelated,cache=TRUE}
+decorr <- cor(train_decorr)
+
+corrplot(decorr)
+```
+
+#3. MODEL CREATION
+Now, since the test data that was given do not contain the response or outcome variable "classe", I need to partition the train dataset into a test and train dataset.  This is done on the first line in the code below.
+
+Next, I decided to base my predictive model on a random forest as in general they are very accurate and often form the basis of models that wins competitions like Kaggle.  I have used the caret packe train method to create my random forest and used 10 fold Cross Validation repeated 3 times as can be seen in the code below.  It is clear that the model produced is highly accurate.
+
+```{r partioning, cache=TRUE}
+set.seed(1234)
+#Partition the training data set into a train and test set.
+newTrainSet <- createDataPartition(y=traindata$classe, p=0.75, list=FALSE)
+#Get the new train data set.
+newTrain <- train_decorr[newTrainSet,]
+#Get the new test data set.
+newTest <- train_decorr[-newTrainSet,]
+
+#Create a factor response variable for the new train set.
+fact_class_train <- as.factor(traindata$classe[newTrainSet])
+#Create a factor response variable for the new test set.
+fact_class_test <- as.factor(traindata$classe[-newTrainSet])
+```
+As can be seen, Accuracy was use to select the optimal model.  The final model used was mtry = 17 with an Accuarcy of 0.998.  
+
+Therefore an estimate of the out-of-sample error rate is 1 - 0.998 = 0.002.
+
+```{r randomForest, cache=TRUE}
+#Creating predictive model using randomforest with 10 fold Cross Validation, 
+#repeated 3 times.
+rf1 <- train(fact_class_train ~., data=newTrain, method="rf",
+             trControl=trainControl(method="repeatedcv", number=10, repeats=3))
+```
+
+```{r rfmodel, results='markup'}
+rf1
+```
+
+Finally, I use the training set that I created to test the accuracy of my model.
+
+```{r predictions}
+rf1_pred <- predict(rf1, newTest)
+```
+
+As can be seen from the confusionMatrix below, the accuracy on my test set is very high - 0.999.
+
+```{r accuracy, results='markup'}
+confusionMatrix(rf1_pred, fact_class_test)
+```
+
+#4. PREDICTIONS FOR TEST CASES
+
+Using the model the following predictions were obtained for the 20 test cases.
+
+```{r test_predictions, results='markup'}
+#Test Case 1
+predict(rf1, test_decorr[1,])
+#Test Case 2
+predict(rf1, test_decorr[2,])
+#Test Case 3
+predict(rf1, test_decorr[3,])
+#Test Case 4
+predict(rf1, test_decorr[4,])
+#Test Case 5
+predict(rf1, test_decorr[5,])
+#Test Case 6
+predict(rf1, test_decorr[6,])
+#Test Case 7
+predict(rf1, test_decorr[7,])
+#Test Case 8
+predict(rf1, test_decorr[8,])
+#Test Case 9
+predict(rf1, test_decorr[9,])
+#Test Case 10
+predict(rf1, test_decorr[10,])
+#Test Case 11
+predict(rf1, test_decorr[11,])
+#Test Case 12
+predict(rf1, test_decorr[12,])
+#Test Case 13
+predict(rf1, test_decorr[13,])
+#Test Case 14
+predict(rf1, test_decorr[14,])
+#Test Case 15
+predict(rf1, test_decorr[15,])
+#Test Case 16
+predict(rf1, test_decorr[16,])
+#Test Case 17
+predict(rf1, test_decorr[17,])
+#Test Case 18
+predict(rf1, test_decorr[18,])
+#Test Case 19
+predict(rf1, test_decorr[19,])
+#Test Case 20
+predict(rf1, test_decorr[20,])
+```
